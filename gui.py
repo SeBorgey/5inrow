@@ -1,6 +1,7 @@
 import sys
 import threading
 import queue
+import subprocess
 from PyQt6 import QtCore, QtGui, QtWidgets
 from PyQt6.QtCore import Qt, QTimer, QPointF
 from PyQt6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, 
@@ -195,10 +196,62 @@ class GameGUI(QMainWindow):
 
     def connect_to_game(self, ip):
         if self.client.connect(ip):
-            self.setup_board_ui()
+            self.connected_ip = ip
+            self.setup_lobby_ui()
             threading.Thread(target=self.receive_loop, daemon=True).start()
         else:
             QMessageBox.critical(self, "Error", "Could not connect to server")
+
+    def setup_lobby_ui(self):
+        self.clear_layout(self.main_layout)
+        
+        self.lobby_frame = QFrame()
+        self.lobby_layout = QVBoxLayout(self.lobby_frame)
+        self.lobby_layout.setAlignment(Qt.AlignmentFlag.AlignTop)
+        
+        title = QLabel("Game Lobby")
+        font = title.font()
+        font.setPointSize(20)
+        title.setFont(font)
+        title.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.lobby_layout.addWidget(title)
+        
+        self.lobby_layout.addSpacing(20)
+        
+        self.players_list_label = QLabel("Waiting for players...")
+        font.setPointSize(14)
+        self.players_list_label.setFont(font)
+        self.players_list_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.lobby_layout.addWidget(self.players_list_label)
+        
+        self.lobby_layout.addStretch()
+        
+        # Bottom pane for Host
+        self.host_controls = QFrame()
+        host_layout = QHBoxLayout(self.host_controls)
+        host_layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        
+        self.add_bot_btn = QPushButton("Add Bot (RL)")
+        self.add_bot_btn.setFixedSize(150, 40)
+        self.add_bot_btn.clicked.connect(self.add_bot_to_lobby)
+        host_layout.addWidget(self.add_bot_btn)
+        
+        self.start_game_btn = QPushButton("Start Game")
+        self.start_game_btn.setFixedSize(150, 40)
+        self.start_game_btn.clicked.connect(self.send_start_game)
+        self.start_game_btn.setEnabled(False)
+        host_layout.addWidget(self.start_game_btn)
+        
+        self.lobby_layout.addWidget(self.host_controls)
+        self.host_controls.setVisible(False)
+        
+        self.main_layout.addWidget(self.lobby_frame)
+
+    def add_bot_to_lobby(self):
+        subprocess.Popen([sys.executable, "bot_client.py", getattr(self, "connected_ip", "127.0.0.1")])
+
+    def send_start_game(self):
+        self.client.send({"type": "START_GAME"})
 
     def setup_board_ui(self):
         self.clear_layout(self.main_layout)
@@ -351,8 +404,23 @@ class GameGUI(QMainWindow):
             self.my_id = msg["player_id"]
             self.client.send({"type": "SET_NAME", "name": self.my_name})
             self.setWindowTitle(f"3-Player Tic-Tac-Toe - Player {self.my_id} ({self.my_name})")
+            if self.my_id == 1 and hasattr(self, 'host_controls'):
+                self.host_controls.setVisible(True)
+                
+        elif msg_type == "LOBBY_UPDATE":
+            players = msg.get("players", [])
+            text = "Connected Players:\n\n"
+            for p in players:
+                text += f"Player {p['id']}: {p['name']} (IP: {p['ip']})\n"
+            if hasattr(self, 'players_list_label'):
+                self.players_list_label.setText(text)
+            
+            if hasattr(self, 'add_bot_btn'):
+                self.add_bot_btn.setEnabled(len(players) < 3)
+                self.start_game_btn.setEnabled(len(players) == 3)
             
         elif msg_type == "START":
+            self.setup_board_ui()
             self.started = True
             self.player_names = msg.get("names", {})
             self.status_label.setText(msg["message"])

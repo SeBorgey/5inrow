@@ -14,6 +14,7 @@ class GameServer:
         self.clients = [] # [(conn, addr), ...]
         self.player_ids = {} # conn -> player_id (1, 2, 3)
         self.player_names = {} # player_id -> name
+        self.client_ips = {} # player_id -> ip
         self.current_turn = 1
         self.game_started = False
         self.time_limit = time_limit
@@ -49,13 +50,16 @@ class GameServer:
                 player_id = len(self.clients) + 1
                 self.clients.append(conn)
                 self.player_ids[conn] = player_id
+                self.client_ips[player_id] = addr[0]
                 print(f"Player {player_id} connected from {addr}")
                 
                 # Send initialization data to client
                 self.send_to_client(conn, {"type": "INIT", "player_id": player_id})
                 
+                self.broadcast_lobby()
+
                 if len(self.clients) == 3:
-                    print("All 3 players connected. Waiting for names...")
+                    print("All 3 players connected. Waiting for Host to start...")
             
             threading.Thread(target=self.handle_client, args=(conn,)).start()
 
@@ -82,8 +86,14 @@ class GameServer:
                     if message["type"] == "SET_NAME":
                         with self.lock:
                             self.player_names[player_id] = message.get("name", f"Player {player_id}")
-                            if len(self.player_names) == 3 and not self.game_started:
+                            self.broadcast_lobby()
+                        continue
+                        
+                    if message["type"] == "START_GAME":
+                        with self.lock:
+                            if player_id == 1 and not self.game_started and len(self.clients) == 3:
                                 self.game_started = True
+                                self.current_turn = 1
                                 self.last_move_time = time.time()
                                 self.timer_running = True
                                 threading.Thread(target=self.timer_loop, daemon=True).start()
@@ -150,6 +160,9 @@ class GameServer:
                 del self.player_ids[conn]
                 if player_id in self.player_names:
                     del self.player_names[player_id]
+                if player_id in self.client_ips:
+                    del self.client_ips[player_id]
+                self.broadcast_lobby()
         conn.close()
 
     def send_to_client(self, conn, message):
@@ -165,6 +178,20 @@ class GameServer:
                 client.send(data)
             except:
                 pass
+
+    def broadcast_lobby(self):
+        players_info = []
+        for i in range(1, 4):
+            if i in self.player_names:
+                players_info.append({
+                    "id": i, 
+                    "name": self.player_names[i], 
+                    "ip": self.client_ips.get(i, "Unknown")
+                })
+        self.broadcast({
+            "type": "LOBBY_UPDATE",
+            "players": players_info
+        })
 
 class GameClient:
     def __init__(self):
