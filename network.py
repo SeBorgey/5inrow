@@ -13,6 +13,7 @@ class GameServer:
         self.server.listen(3)
         self.clients = [] # [(conn, addr), ...]
         self.player_ids = {} # conn -> player_id (1, 2, 3)
+        self.player_names = {} # player_id -> name
         self.current_turn = 1
         self.game_started = False
         self.lock = threading.Lock()
@@ -36,8 +37,7 @@ class GameServer:
                 self.send_to_client(conn, {"type": "INIT", "player_id": player_id})
                 
                 if len(self.clients) == 3:
-                    self.game_started = True
-                    self.broadcast({"type": "START", "message": "Game Started! Player 1's Turn", "current_turn": 1})
+                    print("All 3 players connected. Waiting for names...")
             
             threading.Thread(target=self.handle_client, args=(conn,)).start()
 
@@ -59,6 +59,31 @@ class GameServer:
                         message = json.loads(line)
                     except json.JSONDecodeError:
                         print(f"Server JSON Error: {line}")
+                        continue
+
+                    if message["type"] == "SET_NAME":
+                        with self.lock:
+                            self.player_names[player_id] = message.get("name", f"Player {player_id}")
+                            if len(self.player_names) == 3 and not self.game_started:
+                                self.game_started = True
+                                self.broadcast({
+                                    "type": "START", 
+                                    "message": "Game Started! Player 1's Turn", 
+                                    "current_turn": 1,
+                                    "names": self.player_names
+                                })
+                        continue
+                        
+                    if message["type"] == "RESTART":
+                        if player_id == 1:
+                            with self.lock:
+                                self.current_turn = 1
+                                self.game_started = True
+                                self.broadcast({
+                                    "type": "RESTART_GAME",
+                                    "message": "Game Restarted! Player 1's Turn",
+                                    "current_turn": 1
+                                })
                         continue
 
                     if message["type"] == "MOVE":
@@ -92,6 +117,8 @@ class GameServer:
             if conn in self.clients:
                 self.clients.remove(conn)
                 del self.player_ids[conn]
+                if player_id in self.player_names:
+                    del self.player_names[player_id]
         conn.close()
 
     def send_to_client(self, conn, message):
