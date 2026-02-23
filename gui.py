@@ -50,6 +50,28 @@ class GameGUI(QMainWindow):
         super().__init__()
         self.setWindowTitle("3-Player Tic-Tac-Toe")
         self.resize(600, 600)
+        
+        self.setStyleSheet("""
+            QWidget {
+                background-color: #ffffff;
+                color: #000000;
+            }
+            QPushButton {
+                background-color: #e0e0e0;
+                border: 1px solid #999999;
+                padding: 6px 12px;
+                border-radius: 4px;
+            }
+            QPushButton:hover {
+                background-color: #d0d0d0;
+            }
+            QLineEdit {
+                background-color: #ffffff;
+                border: 1px solid #999999;
+                padding: 4px;
+                border-radius: 4px;
+            }
+        """)
 
         self.board = Board(size=GRID_SIZE)
         self.client = GameClient()
@@ -126,6 +148,7 @@ class GameGUI(QMainWindow):
         self.main_layout.addWidget(menu_frame)
 
     def host_game(self):
+        self.my_name = self.name_entry.text() or "Player"
         self.server = GameServer()
         threading.Thread(target=self.server.start, daemon=True).start()
         # Connect to localhost
