@@ -1,7 +1,9 @@
-import tkinter as tk
+import sys
+from PyQt6.QtWidgets import QApplication
 from gui import GameGUI
 
 if __name__ == "__main__":
-    root = tk.Tk()
-    app = GameGUI(root)
-    root.mainloop()
+    app = QApplication(sys.argv)
+    window = GameGUI()
+    window.show()
+    sys.exit(app.exec())

@@ -3,22 +3,23 @@ import subprocess
 import time
 
 def run_client(name, x, y, role):
-    import tkinter as tk
+    from PyQt6.QtWidgets import QApplication
+    from PyQt6.QtCore import QTimer
     from gui import GameGUI
     
-    root = tk.Tk()
-    root.geometry(f"500x600+{x}+{y}")
-    app = GameGUI(root)
+    app = QApplication(sys.argv)
+    window = GameGUI()
+    window.setGeometry(int(x), int(y), 500, 600)
     
-    app.name_entry.delete(0, tk.END)
-    app.name_entry.insert(0, name)
+    window.name_entry.setText(name)
     
     if role == "host":
-        root.after(500, app.host_game)
+        QTimer.singleShot(500, window.host_game)
     else:
-        root.after(1500, app.join_game)
+        QTimer.singleShot(1500, window.join_game)
         
-    root.mainloop()
+    window.show()
+    sys.exit(app.exec())
 
 if __name__ == "__main__":
     if len(sys.argv) > 1:
