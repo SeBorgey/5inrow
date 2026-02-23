@@ -7,7 +7,7 @@ PORT = 5555
 BUFFER_SIZE = 4096
 
 class GameServer:
-    def __init__(self, host='0.0.0.0', port=PORT):
+    def __init__(self, host='0.0.0.0', port=PORT, time_limit=15):
         self.server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         self.server.bind((host, port))
         self.server.listen(3)
@@ -16,8 +16,26 @@ class GameServer:
         self.player_names = {} # player_id -> name
         self.current_turn = 1
         self.game_started = False
+        self.time_limit = time_limit
+        self.last_move_time = 0
+        self.timer_running = False
         self.lock = threading.Lock()
         print(f"Server started on {host}:{port}")
+
+    def timer_loop(self):
+        while self.timer_running:
+            time.sleep(1)
+            with self.lock:
+                if not self.game_started:
+                    continue
+                if time.time() - self.last_move_time >= self.time_limit:
+                    self.current_turn = (self.current_turn % 3) + 1
+                    self.last_move_time = time.time()
+                    self.broadcast({
+                        "type": "SKIP_TURN",
+                        "next_turn": self.current_turn,
+                        "message": f"Time limit exceeded! Player {self.current_turn}'s Turn"
+                    })
 
     def start(self):
         print("Waiting for players...")
@@ -66,12 +84,21 @@ class GameServer:
                             self.player_names[player_id] = message.get("name", f"Player {player_id}")
                             if len(self.player_names) == 3 and not self.game_started:
                                 self.game_started = True
+                                self.last_move_time = time.time()
+                                self.timer_running = True
+                                threading.Thread(target=self.timer_loop, daemon=True).start()
                                 self.broadcast({
                                     "type": "START", 
                                     "message": "Game Started! Player 1's Turn", 
                                     "current_turn": 1,
-                                    "names": self.player_names
+                                    "names": self.player_names,
+                                    "time_limit": self.time_limit
                                 })
+                        continue
+                        
+                    if message["type"] == "GAME_OVER":
+                        with self.lock:
+                            self.game_started = False
                         continue
                         
                     if message["type"] == "RESTART":
@@ -79,10 +106,12 @@ class GameServer:
                             with self.lock:
                                 self.current_turn = 1
                                 self.game_started = True
+                                self.last_move_time = time.time()
                                 self.broadcast({
                                     "type": "RESTART_GAME",
                                     "message": "Game Restarted! Player 1's Turn",
-                                    "current_turn": 1
+                                    "current_turn": 1,
+                                    "time_limit": self.time_limit
                                 })
                         continue
 
@@ -98,13 +127,15 @@ class GameServer:
                         x, y = message["x"], message["y"]
                         # Update turn
                         self.current_turn = (self.current_turn % 3) + 1
+                        self.last_move_time = time.time()
                         
                         response = {
                             "type": "UPDATE",
                             "x": x,
                             "y": y,
                             "player": player_id,
-                            "next_turn": self.current_turn
+                            "next_turn": self.current_turn,
+                            "time_limit": self.time_limit
                         }
                         self.broadcast(response)
                     

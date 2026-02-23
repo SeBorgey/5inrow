@@ -82,7 +82,15 @@ class GameGUI(QMainWindow):
         self.msg_queue = queue.Queue()
         self.server = None
         self.cell_size = 20
-        self.last_move = None
+        self.last_moves = {} # player -> (x, y)
+        self.absolute_last_move_player = None
+        
+        self.time_limit = 15
+        self.time_remaining = 15
+        self.sound_enabled = True
+        
+        self.turn_timer = QTimer(self)
+        self.turn_timer.timeout.connect(self.tick_timer)
 
         self.central_widget = QWidget()
         self.setCentralWidget(self.central_widget)
@@ -94,6 +102,19 @@ class GameGUI(QMainWindow):
         self.timer = QTimer(self)
         self.timer.timeout.connect(self.process_queue)
         self.timer.start(100)
+
+    def tick_timer(self):
+        if self.started and self.time_remaining > 0:
+            self.time_remaining -= 1
+            self.timer_label.setText(f"Time: {self.time_remaining}s")
+
+    def toggle_sound(self):
+        self.sound_enabled = not self.sound_enabled
+        self.sound_btn.setText("Sound: ON" if self.sound_enabled else "Sound: OFF")
+        
+    def play_turn_sound(self, next_turn):
+        if self.sound_enabled and next_turn == self.my_id:
+            QApplication.beep()
 
     def clear_layout(self, layout):
         if layout is not None:
@@ -133,6 +154,13 @@ class GameGUI(QMainWindow):
         self.host_entry.setFixedWidth(200)
         menu_layout.addWidget(self.host_entry, alignment=Qt.AlignmentFlag.AlignCenter)
         
+        menu_layout.addSpacing(10)
+        
+        menu_layout.addWidget(QLabel("Turn Time Limit (s) [Host only]:"))
+        self.time_entry = QLineEdit("15")
+        self.time_entry.setFixedWidth(200)
+        menu_layout.addWidget(self.time_entry, alignment=Qt.AlignmentFlag.AlignCenter)
+        
         menu_layout.addSpacing(20)
         
         self.host_btn = QPushButton("Host Game")
@@ -149,7 +177,13 @@ class GameGUI(QMainWindow):
 
     def host_game(self):
         self.my_name = self.name_entry.text() or "Player"
-        self.server = GameServer()
+        try:
+            time_limit = int(self.time_entry.text())
+            if time_limit <= 0: time_limit = 15
+        except ValueError:
+            time_limit = 15
+            
+        self.server = GameServer(time_limit=time_limit)
         threading.Thread(target=self.server.start, daemon=True).start()
         # Connect to localhost
         self.connect_to_game("127.0.0.1")
@@ -175,12 +209,27 @@ class GameGUI(QMainWindow):
         self.top_layout = QHBoxLayout(self.top_frame)
         self.main_layout.addWidget(self.top_frame)
         
-        # Status Bar
+        # Status Bar Frame
+        self.status_bar_frame = QFrame()
+        self.status_bar_layout = QHBoxLayout(self.status_bar_frame)
+        self.main_layout.addWidget(self.status_bar_frame)
+
         self.status_label = QLabel("Waiting for players...")
         font = self.status_label.font()
         font.setPointSize(12)
         self.status_label.setFont(font)
-        self.main_layout.addWidget(self.status_label)
+        self.status_bar_layout.addWidget(self.status_label)
+        
+        self.status_bar_layout.addStretch()
+        
+        self.timer_label = QLabel("Time: --")
+        self.timer_label.setFont(font)
+        self.timer_label.setStyleSheet("color: red; font-weight: bold;")
+        self.status_bar_layout.addWidget(self.timer_label)
+        
+        self.sound_btn = QPushButton("Sound: ON" if self.sound_enabled else "Sound: OFF")
+        self.sound_btn.clicked.connect(self.toggle_sound)
+        self.status_bar_layout.addWidget(self.sound_btn)
 
         # Canvas Frame 
         self.canvas = BoardWidget(self)
@@ -219,14 +268,12 @@ class GameGUI(QMainWindow):
         self.client.send({"type": "RESTART"})
 
     def draw_board(self, painter):
+        self.draw_last_move_highlight(painter)
         self.draw_grid(painter)
         for y in range(GRID_SIZE):
             for x in range(GRID_SIZE):
                 if self.board.grid[y][x] != 0:
                     self.draw_symbol(painter, x, y, self.board.grid[y][x])
-        
-        if self.last_move:
-            self.draw_last_move_highlight(painter)
 
     def draw_grid(self, painter):
         painter.setPen(QPen(QColor("lightgray"), 1))
@@ -244,14 +291,18 @@ class GameGUI(QMainWindow):
             )
 
     def draw_last_move_highlight(self, painter):
-        x, y = self.last_move
-        cx = x * self.cell_size + self.cell_size / 2
-        cy = y * self.cell_size + self.cell_size / 2
-        r = self.cell_size / 2.2
-        
-        painter.setPen(QPen(QColor("#ffdb58"), 2))
-        painter.setBrush(Qt.BrushStyle.NoBrush)
-        painter.drawRect(QtCore.QRectF(cx - r, cy - r, r * 2, r * 2))
+        for player, move in self.last_moves.items():
+            if not move: continue
+            
+            x, y = move
+            
+            painter.setPen(Qt.PenStyle.NoPen)
+            if player == self.absolute_last_move_player:
+                painter.setBrush(QBrush(QColor("yellow"))) # Bright yellow background
+            else:
+                painter.setBrush(QBrush(QColor("#fcf6c7"))) # Stronger pale yellow background
+                
+            painter.drawRect(QtCore.QRectF(x * self.cell_size, y * self.cell_size, self.cell_size, self.cell_size))
 
     def draw_symbol(self, painter, x, y, player):
         cx = x * self.cell_size + self.cell_size / 2
@@ -305,13 +356,25 @@ class GameGUI(QMainWindow):
             self.started = True
             self.player_names = msg.get("names", {})
             self.status_label.setText(msg["message"])
+            
+            self.time_limit = msg.get("time_limit", 15)
+            self.time_remaining = self.time_limit
+            self.timer_label.setText(f"Time: {self.time_remaining}s")
+            self.turn_timer.start(1000)
+            
             self.update_top_frame(msg.get("current_turn", 1))
             self.canvas.update()
+            self.play_turn_sound(msg.get("current_turn", 1))
             
         elif msg_type == "UPDATE":
             x, y, player = msg["x"], msg["y"], msg["player"]
             self.board.grid[y][x] = player
-            self.last_move = (x, y)
+            self.last_moves[player] = (x, y)
+            self.absolute_last_move_player = player
+            
+            self.time_limit = msg.get("time_limit", 15)
+            self.time_remaining = self.time_limit
+            self.timer_label.setText(f"Time: {self.time_remaining}s")
             
             self.canvas.update()
             
@@ -322,19 +385,39 @@ class GameGUI(QMainWindow):
                 status = f"{self.player_names.get(str(player), f'Player {player}')} WINS!"
                 self.status_label.setText(status)
                 self.update_top_frame(next_turn)
-                QMessageBox.information(self, "Game Over", f"{self.player_names.get(str(player), f'Player {player}')} Wins!")
                 self.started = False
+                self.turn_timer.stop()
+                if self.my_id == 1:
+                    self.client.send({"type": "GAME_OVER"})
+                QMessageBox.information(self, "Game Over", f"{self.player_names.get(str(player), f'Player {player}')} Wins!")
             else:
                 self.status_label.setText(status)
                 self.update_top_frame(next_turn)
+                self.play_turn_sound(next_turn)
+                
+        elif msg_type == "SKIP_TURN":
+            next_turn = msg["next_turn"]
+            self.status_label.setText(msg["message"])
+            self.update_top_frame(next_turn)
+            self.time_remaining = self.time_limit
+            self.timer_label.setText(f"Time: {self.time_remaining}s")
+            self.play_turn_sound(next_turn)
                 
         elif msg_type == "RESTART_GAME":
             self.started = True
             self.board = Board(size=GRID_SIZE)
-            self.last_move = None
+            self.last_moves = {}
+            self.absolute_last_move_player = None
             self.status_label.setText(msg["message"])
+            
+            self.time_limit = msg.get("time_limit", 15)
+            self.time_remaining = self.time_limit
+            self.timer_label.setText(f"Time: {self.time_remaining}s")
+            self.turn_timer.start(1000)
+            
             self.update_top_frame(msg.get("current_turn", 1))
             self.canvas.update()
+            self.play_turn_sound(msg.get("current_turn", 1))
             
         elif msg_type == "ERROR":
             QMessageBox.warning(self, "Warning", msg["message"])
