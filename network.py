@@ -11,10 +11,10 @@ class GameServer:
         self.server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         self.server.bind((host, port))
         self.server.listen(3)
-        self.clients = [] # [(conn, addr), ...]
-        self.player_ids = {} # conn -> player_id (1, 2, 3)
-        self.player_names = {} # player_id -> name
-        self.client_ips = {} # player_id -> ip
+        self.clients = []
+        self.player_ids = {}
+        self.player_names = {}
+        self.client_ips = {}
         self.current_turn = 1
         self.game_started = False
         self.time_limit = time_limit
@@ -46,21 +46,19 @@ class GameServer:
                 if len(self.clients) >= 3:
                     conn.close()
                     continue
-                
+
                 player_id = len(self.clients) + 1
                 self.clients.append(conn)
                 self.player_ids[conn] = player_id
                 self.client_ips[player_id] = addr[0]
                 print(f"Player {player_id} connected from {addr}")
-                
-                # Send initialization data to client
+
                 self.send_to_client(conn, {"type": "INIT", "player_id": player_id})
-                
                 self.broadcast_lobby()
 
                 if len(self.clients) == 3:
                     print("All 3 players connected. Waiting for Host to start...")
-            
+
             threading.Thread(target=self.handle_client, args=(conn,)).start()
 
     def handle_client(self, conn):
@@ -71,12 +69,13 @@ class GameServer:
                 data = conn.recv(BUFFER_SIZE)
                 if not data:
                     break
-                
+
                 buffer += data.decode()
                 while "\n" in buffer:
                     line, buffer = buffer.split("\n", 1)
-                    if not line: continue
-                    
+                    if not line:
+                        continue
+
                     try:
                         message = json.loads(line)
                     except json.JSONDecodeError:
@@ -88,7 +87,7 @@ class GameServer:
                             self.player_names[player_id] = message.get("name", f"Player {player_id}")
                             self.broadcast_lobby()
                         continue
-                        
+
                     if message["type"] == "START_GAME":
                         with self.lock:
                             if player_id == 1 and not self.game_started and len(self.clients) == 3:
@@ -98,19 +97,19 @@ class GameServer:
                                 self.timer_running = True
                                 threading.Thread(target=self.timer_loop, daemon=True).start()
                                 self.broadcast({
-                                    "type": "START", 
-                                    "message": "Game Started! Player 1's Turn", 
+                                    "type": "START",
+                                    "message": "Game Started! Player 1's Turn",
                                     "current_turn": 1,
                                     "names": self.player_names,
                                     "time_limit": self.time_limit
                                 })
                         continue
-                        
+
                     if message["type"] == "GAME_OVER":
                         with self.lock:
                             self.game_started = False
                         continue
-                        
+
                     if message["type"] == "RESTART":
                         if player_id == 1:
                             with self.lock:
@@ -128,31 +127,28 @@ class GameServer:
                     if message["type"] == "MOVE":
                         if not self.game_started:
                             continue
-                            
+
                         if self.current_turn != player_id:
                             self.send_to_client(conn, {"type": "ERROR", "message": "Not your turn!"})
                             continue
 
-                        # Broadcast move to all
                         x, y = message["x"], message["y"]
-                        # Update turn
                         self.current_turn = (self.current_turn % 3) + 1
                         self.last_move_time = time.time()
-                        
-                        response = {
+
+                        self.broadcast({
                             "type": "UPDATE",
                             "x": x,
                             "y": y,
                             "player": player_id,
                             "next_turn": self.current_turn,
                             "time_limit": self.time_limit
-                        }
-                        self.broadcast(response)
-                    
+                        })
+
             except Exception as e:
                 print(f"Error handling player {player_id}: {e}")
                 break
-        
+
         print(f"Player {player_id} disconnected")
         with self.lock:
             if conn in self.clients:
@@ -184,8 +180,8 @@ class GameServer:
         for i in range(1, 4):
             if i in self.player_names:
                 players_info.append({
-                    "id": i, 
-                    "name": self.player_names[i], 
+                    "id": i,
+                    "name": self.player_names[i],
                     "ip": self.client_ips.get(i, "Unknown")
                 })
         self.broadcast({
@@ -198,7 +194,7 @@ class GameClient:
         self.client = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         self.player_id = None
         self.buffer = ""
-        
+
     def connect(self, host, port=PORT):
         try:
             self.client.connect((host, port))
@@ -213,13 +209,12 @@ class GameClient:
         except Exception as e:
             print(f"Send error: {e}")
 
-    # Renamed to make it clear it yields messages
     def receive_messages(self):
         try:
             data = self.client.recv(BUFFER_SIZE)
             if not data:
                 return None
-            
+
             self.buffer += data.decode()
             messages = []
             while "\n" in self.buffer:
